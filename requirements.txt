@@ -1,0 +1,8 @@
+streamlit
+joblib
+pandas 
+numpy
+plotly
+yfinance
+alpaca-py 
+python-dotenv
