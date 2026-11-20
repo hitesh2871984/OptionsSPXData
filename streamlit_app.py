@@ -31,6 +31,25 @@ st.set_page_config(
     page_title="Alpaca ^GSPC / SPX All Options Strategies",
     layout="wide",
 )
+
+st.markdown(
+    """
+    <style>
+        html, body, [class*="css"], .stMarkdown, p, label, span, div, button, input {
+            font-size: 14px !important;
+        }
+        h1, h2, h3, h4, h5, h6, .stSubheader, .stTitle {
+            font-size: 14px !important;
+            line-height: 1.35 !important;
+        }
+        [data-testid="stMetricValue"], [data-testid="stMetricDelta"], [data-testid="stMetricLabel"] {
+            font-size: 14px !important;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("🦅 Alpaca ^GSPC (SPX) — One-Leg & Multi-Leg Options Suite")
 
 STRATEGY_CATALOG = [
@@ -174,10 +193,7 @@ def leg_payoff_at_expiry(
 
 
 def make_sleeve(name: str, legs_spec: list, quotes: dict, qty: int):
-    """
-    legs_spec: list of tuples (contract, OrderSide, ratio_qty)
-    Returns a sleeve dict with mid cashflow, strikes, and leg table rows.
-    """
+    """Build a strategy sleeve with mid cashflow, strikes, and leg table rows."""
     rows = []
     net_per_share = 0.0
     strikes = []
@@ -189,7 +205,6 @@ def make_sleeve(name: str, legs_spec: list, quotes: dict, qty: int):
         strike = float(contract.strike_price)
         strikes.append(strike)
 
-        # SELL = credit (+), BUY = debit (-)
         signed = mid * ratio if side == OrderSide.SELL else -mid * ratio
         net_per_share += signed
 
@@ -226,6 +241,25 @@ def sleeve_pnl_curve(prices: np.ndarray, sleeve: dict) -> np.ndarray:
             prices, contract.type, float(contract.strike_price), side, ratio
         )
     return total * 100.0 * sleeve["qty"]
+
+
+def find_breakeven_strikes(prices: np.ndarray, pnl: np.ndarray) -> list[float]:
+    """Find underlying strike levels where expiration P&L crosses zero."""
+    breakevens = []
+    for i in range(len(prices) - 1):
+        y1, y2 = pnl[i], pnl[i + 1]
+        x1, x2 = prices[i], prices[i + 1]
+        if y1 == 0.0:
+            breakevens.append(round(float(x1), 2))
+        elif (y1 < 0 < y2) or (y1 > 0 > y2):
+            x_zero = x1 + (-y1) * (x2 - x1) / (y2 - y1)
+            breakevens.append(round(float(x_zero), 2))
+
+    deduped = []
+    for be in sorted(breakevens):
+        if not deduped or abs(be - deduped[-1]) > 0.25:
+            deduped.append(be)
+    return deduped
 
 
 def build_sleeves_for_strategy(
@@ -291,7 +325,7 @@ def build_sleeves_for_strategy(
                 )
             )
 
-    # --- CALL / PUT BUTTERFLIES ---
+    # --- CALL BUTTERFLIES ---
     elif strat in (
         "Butterfly: Long Call (Debit)",
         "Butterfly: Short Call (Credit)",
@@ -314,7 +348,10 @@ def build_sleeves_for_strategy(
                 (high_c, OrderSide.SELL, 1),
             ]
 
-        if strat in ("Butterfly: Short Call (Credit)", "Butterfly: Both Credit + Debit Call Butterflies"):
+        if strat in (
+            "Butterfly: Short Call (Credit)",
+            "Butterfly: Both Credit + Debit Call Butterflies",
+        ):
             off = bf_credit_center_offset if "Both" in strat else bf_center_offset
             w = bf_credit_width if "Both" in strat else bf_wing_width
             sleeves.append(
@@ -325,7 +362,10 @@ def build_sleeves_for_strategy(
                     qty,
                 )
             )
-        if strat in ("Butterfly: Long Call (Debit)", "Butterfly: Both Credit + Debit Call Butterflies"):
+        if strat in (
+            "Butterfly: Long Call (Debit)",
+            "Butterfly: Both Credit + Debit Call Butterflies",
+        ):
             off = bf_debit_center_offset if "Both" in strat else bf_center_offset
             w = bf_debit_width if "Both" in strat else bf_wing_width
             sleeves.append(
@@ -337,6 +377,7 @@ def build_sleeves_for_strategy(
                 )
             )
 
+    # --- PUT BUTTERFLIES ---
     elif strat in (
         "Butterfly: Long Put (Debit)",
         "Butterfly: Short Put (Credit)",
@@ -359,7 +400,10 @@ def build_sleeves_for_strategy(
                 (high_p, OrderSide.SELL, 1),
             ]
 
-        if strat in ("Butterfly: Short Put (Credit)", "Butterfly: Both Credit + Debit Put Butterflies"):
+        if strat in (
+            "Butterfly: Short Put (Credit)",
+            "Butterfly: Both Credit + Debit Put Butterflies",
+        ):
             off = bf_credit_center_offset if "Both" in strat else bf_center_offset
             w = bf_credit_width if "Both" in strat else bf_wing_width
             sleeves.append(
@@ -370,7 +414,10 @@ def build_sleeves_for_strategy(
                     qty,
                 )
             )
-        if strat in ("Butterfly: Long Put (Debit)", "Butterfly: Both Credit + Debit Put Butterflies"):
+        if strat in (
+            "Butterfly: Long Put (Debit)",
+            "Butterfly: Both Credit + Debit Put Butterflies",
+        ):
             off = bf_debit_center_offset if "Both" in strat else bf_center_offset
             w = bf_debit_width if "Both" in strat else bf_wing_width
             sleeves.append(
@@ -383,7 +430,10 @@ def build_sleeves_for_strategy(
             )
 
     # --- IRON BUTTERFLIES ---
-    elif strat in ("Butterfly: Iron Butterfly (Credit)", "Butterfly: Inverse Iron Butterfly (Debit)"):
+    elif strat in (
+        "Butterfly: Iron Butterfly (Credit)",
+        "Butterfly: Inverse Iron Butterfly (Debit)",
+    ):
         center_k = float(nearest(calls, spot + bf_center_offset).strike_price)
         sc = nearest(calls, center_k)
         sp = nearest(puts, center_k)
@@ -410,25 +460,33 @@ def build_sleeves_for_strategy(
         lc = nearest(calls, spot + vertical_inner_dist)
         sc = nearest(calls, float(lc.strike_price) + vertical_width)
         sleeves.append(
-            make_sleeve(strat, [(lc, OrderSide.BUY, 1), (sc, OrderSide.SELL, 1)], quotes, qty)
+            make_sleeve(
+                strat, [(lc, OrderSide.BUY, 1), (sc, OrderSide.SELL, 1)], quotes, qty
+            )
         )
     elif strat == "Vertical: Bear Call Spread (Credit)":
         sc = nearest(calls, spot + vertical_inner_dist)
         lc = nearest(calls, float(sc.strike_price) + vertical_width)
         sleeves.append(
-            make_sleeve(strat, [(sc, OrderSide.SELL, 1), (lc, OrderSide.BUY, 1)], quotes, qty)
+            make_sleeve(
+                strat, [(sc, OrderSide.SELL, 1), (lc, OrderSide.BUY, 1)], quotes, qty
+            )
         )
     elif strat == "Vertical: Bull Put Spread (Credit)":
         sp = nearest(puts, spot - vertical_inner_dist)
         lp = nearest(puts, float(sp.strike_price) - vertical_width)
         sleeves.append(
-            make_sleeve(strat, [(sp, OrderSide.SELL, 1), (lp, OrderSide.BUY, 1)], quotes, qty)
+            make_sleeve(
+                strat, [(sp, OrderSide.SELL, 1), (lp, OrderSide.BUY, 1)], quotes, qty
+            )
         )
     elif strat == "Vertical: Bear Put Spread (Debit)":
         lp = nearest(puts, spot - vertical_inner_dist)
         sp = nearest(puts, float(lp.strike_price) - vertical_width)
         sleeves.append(
-            make_sleeve(strat, [(lp, OrderSide.BUY, 1), (sp, OrderSide.SELL, 1)], quotes, qty)
+            make_sleeve(
+                strat, [(lp, OrderSide.BUY, 1), (sp, OrderSide.SELL, 1)], quotes, qty
+            )
         )
 
     # --- STRANGLES ---
@@ -442,7 +500,9 @@ def build_sleeves_for_strategy(
         p = nearest(puts, spot - strangle_dist)
         c = nearest(calls, spot + strangle_dist)
         sleeves.append(
-            make_sleeve(strat, [(p, OrderSide.SELL, 1), (c, OrderSide.SELL, 1)], quotes, qty)
+            make_sleeve(
+                strat, [(p, OrderSide.SELL, 1), (c, OrderSide.SELL, 1)], quotes, qty
+            )
         )
 
     return sleeves
@@ -450,72 +510,87 @@ def build_sleeves_for_strategy(
 
 # --- MAIN WORKSPACE ---
 if not api_key or not secret_key:
-    st.info("Enter your Alpaca API Key and Secret Key in the sidebar to scan chains and trade.")
-    st.stop()
+    st.caption(
+        "Tip: Add your Alpaca API Key and Secret Key in the sidebar or `.env` file before scanning."
+    )
 
 if not selected_strategies:
-    st.warning("Select at least one strategy in the sidebar.")
-    st.stop()
+    st.caption("Tip: Select at least one strategy in the sidebar.")
 
-if st.button("🔍 Scan ^GSPC / SPX Chain & Build Selected Strategies", type="primary"):
-    try:
-        t_client, o_client = get_clients(api_key, secret_key, paper_mode)
-        spot = get_gspc_spot(index_ticker, manual_spot)
+if st.button(
+    "🔍 Scan ^GSPC / SPX Chain & Build Selected Strategies",
+    type="primary",
+    key="btn_scan_chain",
+):
+    if not api_key or not secret_key:
+        st.error("Please enter your Alpaca API Key and Secret Key in the sidebar first.")
+    elif not selected_strategies:
+        st.error("Please select at least one strategy in the sidebar first.")
+    else:
+        try:
+            t_client, o_client = get_clients(api_key, secret_key, paper_mode)
+            spot = get_gspc_spot(index_ticker, manual_spot)
 
-        max_offset = (
-            max(
-                one_leg_dist,
-                vertical_inner_dist + vertical_width,
-                strangle_dist,
-                ic_credit_dist + ic_credit_width,
-                ic_debit_dist + ic_debit_width,
-                abs(bf_center_offset) + bf_wing_width,
-                abs(bf_credit_center_offset) + bf_credit_width,
-                abs(bf_debit_center_offset) + bf_debit_width,
-            )
-            + 50.0
-        )
-
-        ny_today = datetime.now(ZoneInfo("America/New_York")).date()
-        req = GetOptionContractsRequest(
-            underlying_symbols=[option_underlier],
-            status=AssetStatus.ACTIVE,
-            expiration_date_gte=ny_today + timedelta(days=dte_range[0]),
-            expiration_date_lte=ny_today + timedelta(days=dte_range[1]),
-            strike_price_gte=str(max(100.0, spot - max_offset)),
-            strike_price_lte=str(spot + max_offset),
-        )
-        contracts = t_client.get_option_contracts(req).option_contracts
-        if not contracts:
-            raise ValueError("No active option contracts found for the selected DTE/strike window.")
-
-        target_exp = sorted({c.expiration_date for c in contracts})[0]
-        exp_contracts = [c for c in contracts if c.expiration_date == target_exp]
-        spxw = [c for c in exp_contracts if c.symbol.startswith("SPXW")]
-        if spxw:
-            exp_contracts = spxw
-
-        puts = [c for c in exp_contracts if c.type == ContractType.PUT]
-        calls = [c for c in exp_contracts if c.type == ContractType.CALL]
-
-        quotes = o_client.get_option_latest_quote(
-            OptionLatestQuoteRequest(symbol_or_symbols=[c.symbol for c in exp_contracts])
-        )
-
-        all_sleeves = []
-        for strat in selected_strategies:
-            all_sleeves.extend(
-                build_sleeves_for_strategy(strat, puts, calls, quotes, spot, default_qty)
+            max_offset = (
+                max(
+                    one_leg_dist,
+                    vertical_inner_dist + vertical_width,
+                    strangle_dist,
+                    ic_credit_dist + ic_credit_width,
+                    ic_debit_dist + ic_debit_width,
+                    abs(bf_center_offset) + bf_wing_width,
+                    abs(bf_credit_center_offset) + bf_credit_width,
+                    abs(bf_debit_center_offset) + bf_debit_width,
+                )
+                + 50.0
             )
 
-        st.session_state["portfolio_state"] = {
-            "spot": spot,
-            "expiration": target_exp,
-            "sleeves": all_sleeves,
-            "strategies": selected_strategies,
-        }
-    except Exception as e:
-        st.error(f"Error building strategies: {e}")
+            ny_today = datetime.now(ZoneInfo("America/New_York")).date()
+            req = GetOptionContractsRequest(
+                underlying_symbols=[option_underlier],
+                status=AssetStatus.ACTIVE,
+                expiration_date_gte=ny_today + timedelta(days=dte_range[0]),
+                expiration_date_lte=ny_today + timedelta(days=dte_range[1]),
+                strike_price_gte=str(max(100.0, spot - max_offset)),
+                strike_price_lte=str(spot + max_offset),
+            )
+            contracts = t_client.get_option_contracts(req).option_contracts
+            if not contracts:
+                raise ValueError(
+                    "No active option contracts found for the selected DTE/strike window."
+                )
+
+            target_exp = sorted({c.expiration_date for c in contracts})[0]
+            exp_contracts = [c for c in contracts if c.expiration_date == target_exp]
+            spxw = [c for c in exp_contracts if c.symbol.startswith("SPXW")]
+            if spxw:
+                exp_contracts = spxw
+
+            puts = [c for c in exp_contracts if c.type == ContractType.PUT]
+            calls = [c for c in exp_contracts if c.type == ContractType.CALL]
+
+            quotes = o_client.get_option_latest_quote(
+                OptionLatestQuoteRequest(
+                    symbol_or_symbols=[c.symbol for c in exp_contracts]
+                )
+            )
+
+            all_sleeves = []
+            for strat in selected_strategies:
+                all_sleeves.extend(
+                    build_sleeves_for_strategy(
+                        strat, puts, calls, quotes, spot, default_qty
+                    )
+                )
+
+            st.session_state["portfolio_state"] = {
+                "spot": spot,
+                "expiration": target_exp,
+                "sleeves": all_sleeves,
+                "strategies": selected_strategies,
+            }
+        except Exception as e:
+            st.error(f"Error building strategies: {e}")
 
 if "portfolio_state" in st.session_state:
     pstate = st.session_state["portfolio_state"]
@@ -525,12 +600,16 @@ if "portfolio_state" in st.session_state:
     strikes_all = [k for s in sleeves for k in s["strikes"]]
     low_x = min(strikes_all + [spot]) - 60.0
     high_x = max(strikes_all + [spot]) + 60.0
-    prices = np.linspace(low_x, high_x, 600)
+    prices = np.linspace(low_x, high_x, 2000)
 
     combined_pnl = np.zeros_like(prices)
     for s in sleeves:
         combined_pnl += sleeve_pnl_curve(prices, s)
 
+    breakevens = find_breakeven_strikes(prices, combined_pnl)
+    be_text = (
+        ", ".join(f"{be:,.2f}" for be in breakevens) if breakevens else "None in range"
+    )
     net_cashflow_dollars = round(sum(s["net_dollars"] for s in sleeves), 2)
 
     m1, m2, m3, m4 = st.columns(4)
@@ -539,15 +618,18 @@ if "portfolio_state" in st.session_state:
     cf_title = "Total Net Credit" if net_cashflow_dollars >= 0 else "Total Net Debit"
     m3.metric(cf_title, f"${abs(net_cashflow_dollars):,.2f}")
     m4.metric(
-        "Combined Max P&L Range", f"+${combined_pnl.max():,.0f} / ${combined_pnl.min():,.0f}"
+        "Profit / Loss & Breakevens",
+        f"+${combined_pnl.max():,.0f} / ${combined_pnl.min():,.0f}",
+        delta=f"BE Strikes: {be_text}",
+        delta_color="off",
     )
 
-    left_col, right_col = st.columns([1.15, 1.15])
+    left_col, right_col = st.columns([0.4, 0.6])
 
     with left_col:
         st.subheader("Legs & Order Execution")
         df_all = pd.DataFrame([r for s in sleeves for r in s["rows"]])
-        st.dataframe(df_all, use_container_width=True, hide_index=True)
+        st.dataframe(df_all, width="stretch", hide_index=True)
 
         limit_overrides = {}
         for idx, s in enumerate(sleeves):
@@ -563,7 +645,8 @@ if "portfolio_state" in st.session_state:
         if st.button(
             "🚀 Submit Selected Strategy Orders to Alpaca",
             type="primary",
-            use_container_width=True,
+            width="stretch",
+            key="btn_submit_orders",
         ):
             try:
                 t_client, _ = get_clients(api_key, secret_key, paper_mode)
@@ -598,18 +681,19 @@ if "portfolio_state" in st.session_state:
                 st.error(f"Order Error: {e}")
 
     with right_col:
-        st.subheader("Expiration Payoff Graph (Individual & Combined)")
         fig = go.Figure()
 
         if len(sleeves) > 1:
             for s in sleeves:
                 curve = sleeve_pnl_curve(prices, s)
+                s_be = find_breakeven_strikes(prices, curve)
+                s_be_str = ", ".join(f"{b:,.2f}" for b in s_be) if s_be else "None"
                 fig.add_trace(
                     go.Scatter(
                         x=prices,
                         y=curve,
                         mode="lines",
-                        name=f"{s['name']} (${s['net_dollars']:+,.0f})",
+                        name=f"{s['name']} (${s['net_dollars']:+,.0f} | BE: {s_be_str})",
                         line=dict(dash="dash", width=2),
                     )
                 )
@@ -619,22 +703,61 @@ if "portfolio_state" in st.session_state:
                 x=prices,
                 y=combined_pnl,
                 mode="lines",
-                name="Total Combined P&L ($)",
+                name=f"Total Combined P&L (+${combined_pnl.max():,.0f} / ${combined_pnl.min():,.0f} | BE: {be_text})",
                 line=dict(color="#1f77b4", width=3.2),
             )
         )
+
+        if breakevens:
+            fig.add_trace(
+                go.Scatter(
+                    x=breakevens,
+                    y=[0.0] * len(breakevens),
+                    mode="markers+text",
+                    name=f"Breakeven Strikes ({be_text})",
+                    text=[f"BE: {be:,.2f}" for be in breakevens],
+                    textposition="bottom center",
+                    textfont=dict(size=12),
+                    hovertemplate="Breakeven Strike: %{x:,.2f}<br>P&L: $0.00<extra></extra>",
+                    marker=dict(color="#d62728", size=9, symbol="diamond"),
+                )
+            )
+            for be in breakevens:
+                fig.add_vline(
+                    x=be,
+                    line_dash="dashdot",
+                    line_color="#d62728",
+                    line_width=1.2,
+                )
+
         fig.add_hline(y=0, line_dash="dash", line_color="gray")
         fig.add_vline(
             x=spot,
             line_dash="dot",
             line_color="black",
             annotation_text=f"Spot: {spot:,.2f}",
+            annotation_position="bottom right",
+            annotation_font=dict(size=12),
         )
         fig.update_layout(
-            title="^GSPC / SPX Cash-Settled Expiration Payoff (USD)",
-            xaxis_title="^GSPC / SPX Settlement Level",
-            yaxis_title="Profit / Loss ($)",
-            height=460,
-            margin=dict(l=20, r=20, t=45, b=20),
+            font=dict(size=12),
+            xaxis=dict(
+                title=dict(text="^GSPC / SPX Settlement Level", font=dict(size=13)),
+                tickfont=dict(size=12),
+            ),
+            yaxis=dict(
+                title=dict(text="Profit / Loss ($)", font=dict(size=13)),
+                tickfont=dict(size=12),
+            ),
+            legend=dict(
+                orientation="h",
+                yanchor="top",
+                y=-0.22,
+                xanchor="center",
+                x=0.5,
+                font=dict(size=12),
+            ),
+            height=520,
+            margin=dict(l=20, r=20, t=20, b=110),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
