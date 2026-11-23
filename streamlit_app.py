@@ -25,8 +25,6 @@ from alpaca.trading.requests import (
     OptionLegRequest,
 )
 
-@st.cache_data(ttl=300)  # Cache results for 5 minutes
-
 load_dotenv()
 
 st.set_page_config(
